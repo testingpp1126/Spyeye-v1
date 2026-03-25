@@ -34,19 +34,20 @@ function initMap() {
 
 // ── Socket ───────────────────────────────────────────────────
 function initSocket() {
-  socket = io();
+  socket = io({
+    transports: ['websocket', 'polling']
+  });
   const statusEl = document.getElementById('connection-status');
 
   socket.on('connect', () => {
-    statusEl.textContent = 'Connected';
+    statusEl.textContent = 'Connected (Real-time)';
     statusEl.className = 'badge badge-green';
-    // Watch all active trackers
     trackers.forEach(t => socket.emit('watch-tracker', t.id));
   });
 
   socket.on('disconnect', () => {
-    statusEl.textContent = 'Disconnected';
-    statusEl.className = 'badge badge-red';
+    statusEl.textContent = 'Polling mode';
+    statusEl.className = 'badge badge-gray';
   });
 
   socket.on('location-received', (data) => {
@@ -88,6 +89,14 @@ function initSocket() {
       updateDetailPanel(data.trackerId);
     }
   });
+
+  // Polling Fallback: Refresh data every 5 seconds if socket is disconnected or just as extra sync
+  setInterval(() => {
+    loadTrackers();
+    if (selectedTrackerId) {
+      updateDetailPanel(selectedTrackerId);
+    }
+  }, 5000);
 }
 
 // ── API Calls ────────────────────────────────────────────────
