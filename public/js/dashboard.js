@@ -245,16 +245,14 @@ async function updateDetailPanel(trackerId) {
   document.getElementById('detail-device').textContent = (di.platform || '') + ' ' + (di.browser || '');
 
   document.getElementById('detail-device-name').textContent = di.deviceName || '—';
+  document.getElementById('detail-model').textContent = di.deviceModel ? `${di.deviceModel} (${di.platformVer || ''})` : '—';
+  document.getElementById('detail-battery').textContent = di.battery ? `${di.battery} (${di.charging || ''})` : '—';
+  document.getElementById('detail-network').textContent = di.network ? `${di.network} (${di.downlink || ''})` : '—';
   document.getElementById('detail-browser').textContent = di.browser || '—';
   document.getElementById('detail-ip').textContent = di.ipAddress || '—';
   document.getElementById('detail-isp').textContent = di.isp || '—';
   document.getElementById('detail-location').textContent = di.city ? `${di.city}, ${di.region || ''}, ${di.country || ''}` : '—';
-  document.getElementById('detail-country').textContent = di.country || '—';
   document.getElementById('detail-screen').textContent = di.screen || '—';
-  document.getElementById('detail-language').textContent = di.language || '—';
-  document.getElementById('detail-cores').textContent = di.cores || '—';
-  document.getElementById('detail-ram').textContent = di.ram || '—';
-  document.getElementById('detail-touch').textContent = di.touch || '—';
   document.getElementById('detail-timezone').textContent = di.timezone || '—';
 
   // History for THIS session
