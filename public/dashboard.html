@@ -66,6 +66,13 @@
     <main class="main">
       <header class="topbar">
         <div class="topbar-left">
+          <button class="sidebar-toggle" onclick="toggleSidebar()">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="3" y1="12" x2="21" y2="12"></line>
+              <line x1="3" y1="6" x2="21" y2="6"></line>
+              <line x1="3" y1="18" x2="21" y2="18"></line>
+            </svg>
+          </button>
           <h1 id="page-title">Dashboard</h1>
           <span class="badge badge-green" id="connection-status">Connected</span>
         </div>
@@ -89,7 +96,7 @@
           </div>
         </div>
 
-        <!-- Detail Panel (shown when a tracker is selected) -->
+        <!-- Detail Panel -->
         <div class="detail-panel hidden" id="detail-panel">
           <div class="panel-header">
             <h2 id="detail-name">Tracker</h2>
@@ -99,19 +106,18 @@
                   <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                   <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
                 </svg>
-                Copy Link
               </button>
               <button class="btn btn-sm btn-danger" onclick="deleteTracker()">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <polyline points="3 6 5 6 21 6"></polyline>
-                  <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                  <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
                 </svg>
-                Delete
               </button>
             </div>
           </div>
           <div class="panel-body">
-            <div class="info-grid">
+            <!-- Session Switcher -->
+            <div class="section-title">Devices Connected</div>
+            <div class="session-tabs" id="session-tabs"></div>
               <div class="info-item">
                 <span class="info-label">Status</span>
                 <span class="info-value" id="detail-status">—</span>
