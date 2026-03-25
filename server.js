@@ -152,6 +152,14 @@ async function addPhoto(trackerId, photo) {
   }
 }
 
+// Helper to check if a tracker is currently active (last update < 2 minutes ago)
+function isTrackerActive(tracker) {
+  if (!tracker || !tracker.lastLocation?.timestamp) return false;
+  const lastUpdate = new Date(tracker.lastLocation.timestamp);
+  const now = new Date();
+  return (now - lastUpdate) < 120000; // 2 minutes
+}
+
 async function updateDeviceInfo(trackerId, info) {
   try {
     const tCol = await getCollection('trackers');
@@ -241,6 +249,8 @@ app.get('/api/trackers', async (req, res) => {
     for (const t of all) {
       t.locationCount = await lCol.countDocuments({ trackerId: t.id });
       t.photoCount = await pCol.countDocuments({ trackerId: t.id });
+      // Calculate real-time active status
+      t.active = isTrackerActive(t);
     }
     res.json(all);
   } catch (e) {
@@ -258,6 +268,7 @@ app.get('/api/tracker/:id', async (req, res) => {
     const result = { ...tracker };
     result.locations = await lCol.find({ trackerId: req.params.id }).limit(100).toArray();
     result.photos = await pCol.find({ trackerId: req.params.id }).limit(50).toArray();
+    result.active = isTrackerActive(result);
     
     res.json(result);
   } catch (e) {
@@ -320,25 +331,26 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', async () => {
+    // On Vercel, we don't set active: false here because connections are ephemeral.
+    // The 'active' status is computed based on the last update timestamp.
     try {
       if (socket.trackerId) {
-        const tracker = await getTracker(socket.trackerId);
-        if (tracker) {
-          const tCol = await getCollection('trackers');
-          await tCol.updateOne({ id: socket.trackerId }, { $set: { active: false } });
-          io.emit('tracker-updated', { ...tracker, active: false });
-        }
+        console.log('Client leaving tracker room:', socket.trackerId);
       }
     } catch (e) {}
   });
 });
-
 
 // ── Track page route ────────────────────────────────────────
 app.get('/track/:id', async (req, res) => {
   try {
     const tracker = await getTracker(req.params.id);
     if (!tracker) return res.status(404).sendFile(path.join(__dirname, 'public', '404.html'));
+    
+    // Auto-online on page load
+    const tCol = await getCollection('trackers');
+    await tCol.updateOne({ id: req.params.id }, { $set: { active: true } });
+    
     res.sendFile(path.join(__dirname, 'public', 'track.html'));
   } catch (e) {
     res.status(500).send("Critical error loading track page");
