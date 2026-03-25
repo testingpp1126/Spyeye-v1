@@ -31,13 +31,23 @@ function initMap() {
   window.addEventListener('resize', () => map.invalidateSize());
 }
 
+function startClock() {
+  setInterval(() => {
+    const now = new Date();
+    const timeStr = window.innerWidth < 900 
+      ? now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      : now.toLocaleString();
+    document.getElementById('current-time').textContent = timeStr;
+  }, 1000);
+}
+
 // ── Socket ───────────────────────────────────────────────────
 function initSocket() {
   socket = io({ transports: ['websocket', 'polling'] });
   const statusEl = document.getElementById('connection-status');
 
   socket.on('connect', () => {
-    statusEl.textContent = 'Connected';
+    statusEl.textContent = window.innerWidth < 900 ? 'Live' : 'Connected';
     statusEl.className = 'badge badge-green';
     trackers.forEach(t => socket.emit('watch-tracker', t.id));
   });
@@ -307,10 +317,6 @@ function escapeHtml(str) {
   const d = document.createElement('div');
   d.textContent = str;
   return d.innerHTML;
-}
-
-function startClock() {
-  setInterval(() => { document.getElementById('current-time').textContent = new Date().toLocaleString(); }, 1000);
 }
 
 function showToast(m, t = 'success') {
