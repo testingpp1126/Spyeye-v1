@@ -33,16 +33,21 @@ const mockStore = {
 
 async function connectDB() {
   if (db) return db;
-  if (!MONGODB_URI) { db = createMockDB(); return db; }
+  if (dbFailed || !MONGODB_URI) { 
+    console.log('⚡ Memory Store Active');
+    db = createMockDB(); 
+    return db; 
+  }
   try {
-    const client = new MongoClient(MONGODB_URI, { connectTimeoutMS: 10000 });
+    const client = new MongoClient(MONGODB_URI, { connectTimeoutMS: 2000 });
     await client.connect();
-    db = client.db(DATABASE_NAME);
-    console.log('✅ MongoDB Linked on Render');
+    db = client.db('spyeye');
+    console.log('✅ DB Connected');
     return db;
   } catch (err) {
-    console.error('❌ DB Error:', err.message);
-    if (!db) db = createMockDB();
+    console.error('❌ DB Fail:', err.message);
+    dbFailed = true;
+    db = createMockDB();
     return db;
   }
 }
@@ -220,11 +225,15 @@ app.get('/api/trackers', async (req, res) => {
   try {
     const col = await getCollection('trackers');
     const sCol = await getCollection('sessions');
+    const lCol = await getCollection('locations');
+    const pCol = await getCollection('photos');
     const all = await col.find({}).toArray();
     for (const t of all) {
       const sessions = await sCol.find({ trackerId: t.id }).toArray();
       t.sessionCount = sessions.length;
       t.active = sessions.some(s => isSessionActive(s));
+      t.locationCount = await lCol.countDocuments({ trackerId: t.id });
+      t.photoCount = await pCol.countDocuments({ trackerId: t.id });
     }
     res.json(all);
   } catch (e) { res.status(500).json({ error: e.message }); }
@@ -309,8 +318,10 @@ app.get('/track/:id', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`\n  🟢 Tracker running at http://localhost:${PORT}\n`);
-});
+if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
+  server.listen(PORT, () => {
+    console.log(`\n  🟢 Tracker running at http://localhost:${PORT}\n`);
+  });
+}
 
 module.exports = server;
