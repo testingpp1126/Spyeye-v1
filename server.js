@@ -161,6 +161,10 @@ app.get('/api/db-status', (req, res) => {
   res.json({ connected: !!db && !dbFailed, mode: dbFailed ? 'mock' : 'persistent', timestamp: new Date() });
 });
 
+app.get('/api/debug', (req, res) => {
+  res.json({ mockStore, env: { hasUri: !!process.env.MONGODB_URI, port: process.env.PORT }, dbStatus: { failed: dbFailed, connected: !!db } });
+});
+
 app.post('/api/tracker/:id/location', async (req, res) => {
   try {
     const { sessionId, latitude, longitude, accuracy, altitude, speed, heading } = req.body;
